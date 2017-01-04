@@ -1,6 +1,7 @@
 # Project on Robustness of Majorana bound states in the short junction limit
 By Doru Sticlet, Bas Nijholt, and Anton Akhmerov
 
+See the "Robustness of Majorana bound states in the short junction limit" paper on [arXiv:1609.00637](http://arxiv.org/abs/1609.00637) [[pdf](http://arxiv.org/pdf/1609.00637)].
 
 # Files
 This folder contains three IPython notebooks and two Python files:
