@@ -1,21 +1,31 @@
-"""Functions library used to calculate phase diagrams.
+"""Functions library used to calculate phase diagrams for the "Robustness of
+Majorana bound states in the short junction limit" paper by 
+Doru Sticlet, Bas Nijholt, and Anton Akhmerov
 
-By Bas Nijholt"""
+arXiv:1609.00637, to be published in PRB."""
 
-import kwant
-import holoviews as hv
-import numpy as np
-import ipyparallel
-from wraparound import wraparound
-from discretizer import Discretizer, momentum_operators
-import sympy
+
+# 1. Standard library imports
 from itertools import product
+import subprocess
 from types import SimpleNamespace
+
+# 2. External package imports
+from discretizer import Discretizer, momentum_operators
+import holoviews as hv
+import ipyparallel
+import kwant
+import numpy as np
 import scipy.sparse.linalg as sla
+from scipy.constants import hbar, m_e, eV, physical_constants
 from scipy.linalg import expm
 from scipy.optimize import minimize_scalar
 from sympy.physics.quantum import TensorProduct as kr
-from scipy.constants import hbar, m_e, eV, physical_constants
+import sympy
+
+# 3. Internal imports
+from wraparound import wraparound
+
 
 sx, sy, sz = [sympy.physics.matrices.msigma(i) for i in range(1, 4)]
 s0 = sympy.eye(2)
@@ -27,6 +37,12 @@ class SimpleNamespace(SimpleNamespace):
     def update(self, **kwargs):
         self.__dict__.update(kwargs)
         return self
+
+
+def get_git_revision_hash():
+    """Get the git hash to save with data to ensure reproducibility."""
+    git_output = subprocess.check_output(['git', 'rev-parse', 'HEAD'])
+    return git_output.decode("utf-8").replace('\n', '')
 
 
 # Parameters taken from arXiv:1204.2792
@@ -52,6 +68,7 @@ d = SimpleNamespace(B=hv.Dimension('$B$', unit='T'),
                     k=hv.Dimension('$k_x$'),
                     xi_inv=hv.Dimension(r'$\xi^-1$', unit=r'nm$^-1$'),
                     xi=hv.Dimension(r'$\xi$', unit=r'nm'))
+
 
 def make_params(alpha=20, 
                 B_x=0, 
@@ -471,7 +488,7 @@ def slowest_evan_mode(syst, p, a, c=constants, return_ev=False):
     return majorana_length
 
 
-def plot_phase(dview, lview, p, W, H, dim, num_k=201, Bs=None, mus=None, a=10, async_parallel=True):
+def plot_phase(dview, lview, p, W, H, dim, num_k=201, fname=None, Bs=None, mus=None, a=10, async_parallel=True):
     """Calculates a phase diagram of bandgap sizes in (B, mu) space in parallel.
     
     Parameters:
@@ -524,15 +541,16 @@ def plot_phase(dview, lview, p, W, H, dim, num_k=201, Bs=None, mus=None, a=10, a
     if mus is None:
         mus = np.linspace(0.1, 15, 50)
 
+    vals = list(product(Bs, mus))
     if async_parallel:
-        vals = list(product(Bs, mus))
         systs = [ipyparallel.Reference('syst')] * len(vals)
         Es = lview.map_async(lambda x, sys: find_gap(sys, p.update(B_x=x[0], mu_sm=x[1]), num_k), 
                              vals, systs)
         Es.wait_interactive()
-        result = np.array(Es.result()).reshape(len(Bs), len(mus), -1)
+        Es = Es.result()
+        result = np.array(Es).reshape(len(Bs), len(mus), -1)
     else:
-        dview.scatter('xs', list(product(Bs, mus)), block=True)
+        dview.scatter('xs', vals, block=True)
         dview.execute('Es = [find_gap(syst, p.update(B_x=x[0], mu_sm=x[1]), num_k) for x in xs]',
                       block=True)
         Es = dview.gather('Es', block=True)
@@ -547,12 +565,15 @@ def plot_phase(dview, lview, p, W, H, dim, num_k=201, Bs=None, mus=None, a=10, a
               'vdims': [d.gap],
               'bounds': bounds,
               'label': 'Band gap'}
+
     plot = hv.Image(np.rot90(gaps), **kwargs)
-    plot.cdims = dict(p=p, k_xs=k_xs, Bs=Bs, mus=mus, W=W, H=H, dim=dim, num_k=num_k)
+    plot.cdims.update(dict(p=p, k_xs=k_xs, Bs=Bs, mus=mus, W=W, H=H, dim=dim, 
+                           constants=constants, num_k=num_k,
+                           git_hash=get_git_revision_hash()))
     return plot
 
 
-def plot_decay_lengths(dview, lview, p, W, H, dim, Bs=None, mus=None, a=10, async_parallel=False):
+def plot_decay_lengths(dview, lview, p, W, H, dim, fname=None, Bs=None, mus=None, a=10, async_parallel=False):
     """Calculates a phase diagram of Majorana decay lengths (nm) 
     in (B, mu) space.
     
@@ -570,8 +591,6 @@ def plot_decay_lengths(dview, lview, p, W, H, dim, Bs=None, mus=None, a=10, asyn
         Height of system in nm (ignored if dim=2).
     dim : int
         Dimension of system, 2D or 3D.
-    num_k : int
-        Number of momenta on which the bandstructure is calculated.
     Bs : numpy array or list
         Range of values of magnetic field on which the bandgap is calculated.
     mus : numpy array or list
@@ -605,9 +624,10 @@ def plot_decay_lengths(dview, lview, p, W, H, dim, Bs=None, mus=None, a=10, asyn
         Bs = np.linspace(0, 2, 50)
     if mus is None:
         mus = np.linspace(0.1, 15, 50)
-
+    
+    vals = list(product(Bs, mus))
     if async_parallel:
-        vals = list(product(Bs, mus))
+
         systs = [ipyparallel.Reference('syst')] * len(vals)
         decay_lengths = lview.map_async(lambda x, sys:
             slowest_evan_mode(sys, p.update(B_x=x[0], mu_sm=x[1], mu_sc=x[1]), a), vals, systs)
@@ -615,7 +635,7 @@ def plot_decay_lengths(dview, lview, p, W, H, dim, Bs=None, mus=None, a=10, asyn
         decay_lengths.wait_interactive()
         result = np.array(decay_lengths.result()).reshape(len(Bs), len(mus))
     else:
-        dview.scatter('xs', list(product(Bs, mus)), block=True)
+        dview.scatter('xs', vals, block=True)
         dview.execute("""decay_lengths = [slowest_evan_mode(syst, 
                       p.update(B_x=x[0], mu_sm=x[1], mu_sc=x[1]), a) for x in xs]""")
         decay_lengths = dview.gather('decay_lengths', block=True)
@@ -627,7 +647,11 @@ def plot_decay_lengths(dview, lview, p, W, H, dim, Bs=None, mus=None, a=10, asyn
               'vdims': [d.xi],
               'bounds': bounds,
               'label': 'Decay length'}
-    return hv.Image(np.rot90(result), **kwargs)
+
+    plot = hv.Image(np.rot90(result), **kwargs)
+    plot.cdims.update(dict(p=p, Bs=Bs, mus=mus, W=W, H=H, dim=dim, constants=constants,
+    	                   git_hash=get_git_revision_hash()))
+    return plot
 
 
 def Ez_to_B(Ez, constants=constants):
